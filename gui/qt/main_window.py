@@ -140,6 +140,7 @@ class ElectrumWindow(QMainWindow):
         tabs.addTab(self.create_contacts_tab(), _('Contacts') )
         tabs.addTab(self.create_invoices_tab(), _('Invoices') )
         tabs.addTab(self.create_console_tab(), _('Console') )
+        tabs.addTab(self.create_0ffl1ne_tab(), _('0ffl1ne') )
         tabs.setMinimumSize(600, 400)
         tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setCentralWidget(tabs)
@@ -1745,6 +1746,131 @@ class ElectrumWindow(QMainWindow):
         self.console = console = Console()
         return console
 
+
+    def create_0ffl1ne_tab(self):
+        w = QWidget()
+
+        self.send_grid = grid = QGridLayout(w)
+        grid.setSpacing(8)
+        grid.setColumnMinimumWidth(3,300)
+        grid.setColumnStretch(5,1)
+        grid.setRowStretch(8, 1)
+
+        from paytoedit import PayToEdit
+        self.amount_e = BTCAmountEdit(self.get_decimal_point)
+        self.payto_e = PayToEdit(self)
+        self.payto_help = HelpButton(_('Recipient of the funds.') + '\n\n' + _('You may enter a Bitcoin address, a label from your list of contacts (a list of completions will be proposed), or an alias (email-like address that forwards to a Bitcoin address)'))
+        grid.addWidget(QLabel(_('Pay to')), 1, 0)
+        grid.addWidget(self.payto_e, 1, 1, 1, 3)
+        grid.addWidget(self.payto_help, 1, 4)
+
+        completer = QCompleter()
+        completer.setCaseSensitivity(False)
+        self.payto_e.setCompleter(completer)
+        completer.setModel(self.completions)
+
+        self.message_e = MyLineEdit()
+        self.message_help = HelpButton(_('Description of the transaction (not mandatory).') + '\n\n' + _('The description is not sent to the recipient of the funds. It is stored in your wallet file, and displayed in the \'History\' tab.'))
+        grid.addWidget(QLabel(_('Description')), 2, 0)
+        grid.addWidget(self.message_e, 2, 1, 1, 3)
+        grid.addWidget(self.message_help, 2, 4)
+
+        self.from_label = QLabel(_('From'))
+        grid.addWidget(self.from_label, 3, 0)
+        self.from_list = MyTreeWidget(self)
+        self.from_list.setColumnCount(2)
+        self.from_list.setColumnWidth(0, 350)
+        self.from_list.setColumnWidth(1, 50)
+        self.from_list.setHeaderHidden(True)
+        self.from_list.setMaximumHeight(80)
+        self.from_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.from_list.customContextMenuRequested.connect(self.from_list_menu)
+        grid.addWidget(self.from_list, 3, 1, 1, 3)
+        self.set_pay_from([])
+
+        self.amount_help = HelpButton(_('Amount to be sent.') + '\n\n' \
+                                      + _('The amount will be displayed in red if you do not have enough funds in your wallet. Note that if you have frozen some of your addresses, the available funds will be lower than your total balance.') \
+                                      + '\n\n' + _('Keyboard shortcut: type "!" to send all your coins.'))
+        grid.addWidget(QLabel(_('Amount')), 4, 0)
+        grid.addWidget(self.amount_e, 4, 1, 1, 2)
+        grid.addWidget(self.amount_help, 4, 3)
+
+        self.fee_e_label = QLabel(_('Fee'))
+        self.fee_e = BTCAmountEdit(self.get_decimal_point)
+        grid.addWidget(self.fee_e_label, 5, 0)
+        grid.addWidget(self.fee_e, 5, 1, 1, 2)
+        msg = _('Bitcoin transactions are in general not free. A transaction fee is paid by the sender of the funds.') + '\n\n'\
+              + _('The amount of fee can be decided freely by the sender. However, transactions with low fees take more time to be processed.') + '\n\n'\
+              + _('A suggested fee is automatically added to this field. You may override it. The suggested fee increases with the size of the transaction.')
+        self.fee_e_help = HelpButton(msg)
+        grid.addWidget(self.fee_e_help, 5, 3)
+        self.update_fee_edit()
+        self.send_button = EnterButton(_("Send"), self.do_send)
+        grid.addWidget(self.send_button, 6, 1)
+        b = EnterButton(_("Clear"), self.do_clear)
+        grid.addWidget(b, 6, 2)
+        self.payto_sig = QLabel('')
+        grid.addWidget(self.payto_sig, 7, 0, 1, 4)
+        w.setLayout(grid)
+
+        def on_shortcut():
+            sendable = self.get_sendable_balance()
+            inputs = self.get_coins()
+            for i in inputs: self.wallet.add_input_info(i)
+            addr = self.payto_e.payto_address if self.payto_e.payto_address else self.dummy_address
+            output = ('address', addr, sendable)
+            dummy_tx = Transaction(inputs, [output])
+            fee = self.wallet.estimated_fee(dummy_tx)
+            self.amount_e.setAmount(max(0,sendable-fee))
+            self.amount_e.textEdited.emit("")
+            self.fee_e.setAmount(fee)
+
+        self.amount_e.shortcut.connect(on_shortcut)
+
+        def text_edited(is_fee):
+            outputs = self.payto_e.get_outputs()
+            amount = self.amount_e.get_amount()
+            fee = self.fee_e.get_amount() if is_fee else None
+            if amount is None:
+                self.fee_e.setAmount(None)
+                self.not_enough_funds = False
+            else:
+                if not outputs:
+                    addr = self.payto_e.payto_address if self.payto_e.payto_address else self.dummy_address
+                    outputs = [('address', addr, amount)]
+                try:
+                    tx = self.wallet.make_unsigned_transaction(outputs, fee, coins = self.get_coins())
+                    self.not_enough_funds = False
+                except NotEnoughFunds:
+                    self.not_enough_funds = True
+                if not is_fee:
+                    fee = None if self.not_enough_funds else self.wallet.get_tx_fee(tx)
+                    self.fee_e.setAmount(fee)
+
+        self.payto_e.textChanged.connect(lambda:text_edited(False))
+        self.amount_e.textEdited.connect(lambda:text_edited(False))
+        self.fee_e.textEdited.connect(lambda:text_edited(True))
+
+        def entry_changed():
+            if not self.not_enough_funds:
+                palette = QPalette()
+                palette.setColor(self.amount_e.foregroundRole(), QColor('black'))
+                text = ""
+            else:
+                palette = QPalette()
+                palette.setColor(self.amount_e.foregroundRole(), QColor('red'))
+                text = _( "Not enough funds" )
+                c, u = self.wallet.get_frozen_balance()
+                if c+u: text += ' (' + self.format_amount(c+u).strip() + ' ' + self.base_unit() + ' ' +_("are frozen") + ')'
+            self.statusBar().showMessage(text)
+            self.amount_e.setPalette(palette)
+            self.fee_e.setPalette(palette)
+
+        self.amount_e.textChanged.connect(entry_changed)
+        self.fee_e.textChanged.connect(entry_changed)
+
+        run_hook('create_send_tab', grid)
+        return w
 
     def update_console(self):
         console = self.console

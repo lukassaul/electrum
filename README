@@ -1,3 +1,14 @@
+This version of Electrum is modified to include utilities for the online side of the 0ffl1ne interconnect device system.  
+
+Also needed for electrum:
+sudo apt-get install python-twisted python-socksipy
+
+Lukas Saul
+Vermont Secure Computing
+
+
+----------
+
 Electrum - lightweight Bitcoin client
 
 Licence: GNU GPL v3
